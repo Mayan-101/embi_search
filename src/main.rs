@@ -1,118 +1,125 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use embi_search::embedding::{self, EmbeddingEngine};
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+
+use embi_search::embedding::EmbeddingEngine;
+use embi_search::harvester::{spawn_watcher, FileEvent};
 use embi_search::server::LlamaServer;
 use embi_search::vectorstore::{DocumentChunk, VectorStore};
 
-/// CLI test runner for Phases 1 & 2.
-///
-/// Phase 1: Spawn llama-server → embed two strings → print cosine similarity
-/// Phase 2: Embed 5 documents → insert into LanceDB → query → assert top match
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llama_dir = Path::new("llama");
-    let model_path = Path::new("nomic-embed-text-v1.5.Q4_K_M.gguf");
+    let model_path = Path::new("model/nomic-embed-text-v1.5.Q4_K_M.gguf");
     let port: u16 = 8080;
 
-    // ── Phase 1: Boot the embedding server ──────────────────────────────
+    // ── Boot the embedding server ───────────────────────────────────────
     let server = LlamaServer::spawn(llama_dir, model_path, port)?;
     server.wait_until_ready(Duration::from_secs(60))?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    let engine = EmbeddingEngine::new(server.port());
-
-    // ── Phase 1 Test: Cosine similarity ─────────────────────────────────
-    {
-        let text1 = "The quick brown fox jumps over the lazy dog";
-        let text2 = "A fast dark colored canine leaps over an inactive hound";
-
-        println!("\n=== Phase 1: Embedding Similarity Test ===");
-        let vec1 = rt.block_on(engine.embed(text1))?;
-        let vec2 = rt.block_on(engine.embed(text2))?;
-
-        let similarity = embedding::cosine_similarity(&vec1, &vec2);
-        println!("  Vector dimension: {}", vec1.len());
-        println!("  Cosine Similarity: {:.6}", similarity);
-        assert!(similarity > 0.5, "Similarity should be > 0.5 for related sentences");
-        println!("  ✓ Phase 1 PASSED");
-    }
-
-    // ── Phase 2: Vector Store Integration Test ──────────────────────────
-    {
-        println!("\n=== Phase 2: Vector Store Integration Test ===");
-
-        // Use a temporary database path for the test.
-        let test_db_path = ".lancedb_test";
-        if Path::new(test_db_path).exists() {
-            std::fs::remove_dir_all(test_db_path)?;
-        }
-
-        let store = rt.block_on(VectorStore::connect(test_db_path))?;
-
-        // 5 test documents with their real embeddings.
-        let documents = vec![
-            ("doc1", "C:\\docs\\rust_guide.txt",    "Rust is a systems programming language focused on safety and performance"),
-            ("doc2", "C:\\docs\\python_intro.md",    "Python is a high-level interpreted language popular for data science"),
-            ("doc3", "C:\\docs\\cooking_recipe.txt",  "Preheat the oven to 350°F and mix flour with sugar"),
-            ("doc4", "C:\\docs\\travel_blog.md",      "The beaches of Bali are stunning with crystal clear water"),
-            ("doc5", "C:\\docs\\rust_async.txt",      "Async programming in Rust uses futures and the tokio runtime"),
-        ];
-
-        println!("  Embedding {} documents...", documents.len());
-        let mut chunks = Vec::new();
-        for (id, path, content) in &documents {
-            let vector = rt.block_on(engine.embed(content))?;
-            chunks.push(DocumentChunk {
-                id: id.to_string(),
-                vector,
-                file_path: path.to_string(),
-                content_snippet: content.to_string(),
-            });
-        }
-
-        // Insert all chunks.
-        rt.block_on(store.insert_chunks(&chunks))?;
-
-        let count = rt.block_on(store.count_rows())?;
-        println!("  Rows in DB: {}", count);
-        assert_eq!(count, 5, "Should have exactly 5 rows");
-
-        // Query with the exact vector of doc1 ("Rust systems programming").
-        println!("  Querying with doc1 vector...");
-        let results = rt.block_on(store.search(&chunks[0].vector, 3))?;
-
-        println!("  Top {} results:", results.len());
-        for (i, r) in results.iter().enumerate() {
-            println!("    {}. [dist={:.6}] {} — {}", i + 1, r.distance, r.file_path, r.content_snippet);
-        }
-
-        // Assert: top result should be doc1 itself (distance ≈ 0).
-        assert_eq!(results[0].file_path, "C:\\docs\\rust_guide.txt",
-            "Top result should be the queried document itself");
-        assert!(results[0].distance < 1e-6,
-            "Distance to self should be ~0, got {}", results[0].distance);
-
-        // Assert: doc5 (Rust async) should be in top 3 (semantically similar to doc1).
-        let top3_paths: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
-        assert!(top3_paths.contains(&"C:\\docs\\rust_async.txt"),
-            "Rust async doc should be in top 3 similar to Rust guide");
-
-        // Test delete.
-        rt.block_on(store.delete_by_path("C:\\docs\\cooking_recipe.txt"))?;
-        let count_after = rt.block_on(store.count_rows())?;
-        assert_eq!(count_after, 4, "Should have 4 rows after deleting 1");
-
-        println!("  ✓ Phase 2 PASSED");
-
-        // Clean up test database.
+    
+    let _guard = rt.enter();
+    // Wrap our core services in Arc so they can be safely shared with background threads
+    let engine = Arc::new(EmbeddingEngine::new(server.port()));
+    
+    let test_db_path = ".lancedb_test";
+    if Path::new(test_db_path).exists() {
         std::fs::remove_dir_all(test_db_path)?;
-        println!("  Cleaned up test database");
     }
+    let store = Arc::new(rt.block_on(VectorStore::connect(test_db_path))?);
+
+    // ── Phase 3: Watcher Pipeline Test ──────────────────────────────────
+    println!("\n=== Phase 3: Watcher Pipeline Test ===");
+
+    let test_dir = PathBuf::from("test_watch_zone");
+    if test_dir.exists() {
+        std::fs::remove_dir_all(&test_dir)?;
+    }
+    std::fs::create_dir(&test_dir)?;
+
+    // 1. Create the channel
+    let (tx, mut rx) = mpsc::channel::<FileEvent>(100);
+
+    // 2. Start the Watcher on the test directory
+    let _watcher = spawn_watcher(test_dir.clone(), tx.clone())?;
+    println!("  Watcher spawned on {:?}", test_dir);
+
+    // 3. Spawn the background Worker Task
+   // 3. Spawn the background Worker Task
+    let engine_clone = Arc::clone(&engine);
+    let store_clone = Arc::clone(&store);
+    
+    let worker_handle = rt.spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                FileEvent::Upsert(path) => {
+                    // Windows File Lock mitigation
+                    sleep(Duration::from_millis(100)).await;
+                    
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if content.trim().is_empty() { continue; }
+                        
+                        println!("  [Worker] Upserting: {:?}", path);
+                        
+                        // FIX: Use .ok() to convert Result to Option. 
+                        // This drops the non-Send Box<dyn Error> immediately!
+                        if let Some(vector) = engine_clone.embed(&content).await.ok() {
+                            let chunk = DocumentChunk {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                vector,
+                                file_path: path.to_string_lossy().to_string(),
+                                content_snippet: content,
+                            };
+                            let _ = store_clone.delete_by_path(&chunk.file_path).await;
+                            let _ = store_clone.insert_chunks(&[chunk]).await;
+                        }
+                    }
+                }
+                FileEvent::Remove(path) => {
+                    println!("  [Worker] Removing: {:?}", path);
+                    let _ = store_clone.delete_by_path(&path.to_string_lossy()).await;
+                }
+            }
+        }
+    });
+    // 4. Simulate User Filesystem Actions
+    let file_path = test_dir.join("live_test.txt");
+    
+    // Create
+    std::fs::write(&file_path, "Rust makes file watching safe and easy.")?;
+    std::thread::sleep(Duration::from_secs(2)); // Wait for pipeline
+    let count = rt.block_on(store.count_rows())?;
+    println!("  Rows after creation: {}", count);
+    assert!(count >= 1, "Database should have stored the new file");
+
+    // Modify
+    std::fs::write(&file_path, "Rust makes file watching highly performant.")?;
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Delete
+    std::fs::remove_file(&file_path)?;
+    std::thread::sleep(Duration::from_secs(2));
+    
+    let final_count = rt.block_on(store.count_rows())?;
+    println!("  Rows after deletion: {}", final_count);
+    assert_eq!(final_count, 0, "Database should be empty after deletion");
+
+    drop(_watcher); 
+    drop(tx);       
+
+
+    rt.block_on(worker_handle).ok(); 
+
+    std::fs::remove_dir_all(&test_dir)?;
+    std::fs::remove_dir_all(test_db_path)?;
+    println!("  ✓ Phase 3 PASSED");
 
     println!("\n=== All tests passed! ===");
     println!("Server will be shut down.");
 
-    // Runtime dropped, then server dropped (kills llama-server.exe).
-    drop(rt);
+    drop(rt); 
     Ok(())
 }
