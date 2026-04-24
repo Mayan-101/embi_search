@@ -1,0 +1,13 @@
+Spinning Black Holes
+
+**Spinning black holes**, or rotating black holes, are cosmic objects that possess angular momentum, a property they inherit from the rotation of the stars that formed them or from the accretion of surrounding matter. Because angular momentum is conserved, as a star collapses into a black hole, its spin rate increases dramatically, often reaching **more than 90% the speed of light**.
+
+### Physical Mechanisms and Effects
+*   **Spacetime Dragging**: According to Einstein’s general relativity, a spinning black hole drags the fabric of spacetime around it, a phenomenon known as frame-dragging. This allows matter to orbit much closer to the event horizon than it could around a non-rotating black hole.
+*   **Kerr Black Holes**: The mathematical description for these objects is the **Kerr metric**. Unlike non-rotating Schwarzschild black holes, rotating black holes feature an **ergosphere** outside the event horizon where space itself is forced to rotate.
+*   **Energy Extraction**: Energy can theoretically be extracted from a spinning black hole via the **Penrose process** within the ergosphere, potentially powering relativistic jets that emit gamma rays.
+
+### Measurement and Growth
+*   **X-Ray Spectroscopy**: Astronomers measure spin by analyzing X-rays emitted by iron atoms in the accretion disk. The gravitational redshift and broadening of these spectral lines reveal how close the disk extends to the black hole, which correlates directly with spin rate.
+*   **Growth History**: Recent studies from the **Sloan Digital Sky Survey (SDSS)** indicate that many supermassive black holes spin rapidly because they grew primarily through **smooth accretion** of gas, rather than through chaotic mergers with other black holes, which tend to randomize or slow down spin.
+*   **Tidal Disruption Events**: New methods involve observing the **wobble** of accretion disks formed when a black hole tears apart a passing star; the pattern of this wobble allows scientists to calculate the black hole's spin.

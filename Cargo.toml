@@ -1,7 +1,7 @@
 [package]
 name = "embi_search"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [lib]
 name = "embi_search"
@@ -10,7 +10,19 @@ path = "src/lib.rs"
 [[bin]]
 name = "embi_search"
 path = "src/main.rs"
+[profile.dev]
+# Reduces debug info (0 = none, 1 = line tables only, 2 = full). 
+# 1 is a great middle ground: you get line numbers in panics, but save gigabytes of space.
+debug = 1 
 
+# Splits debug info into separate files (specifically helps on Windows)
+split-debuginfo = "unpacked"
+
+[profile.release]
+# Ensures your final production build is as tiny as possible
+opt-level = "z"  # Optimize for size
+lto = true       # Link Time Optimization (slower to build, much smaller binary)
+strip = true     # Automatically strip symbols from the final binary
 [dependencies]
 arrow = "57.3.0"
 arrow-array = "57.3.0"
@@ -26,3 +38,8 @@ ignore = "0.4"
 notify = "8.0.0"        
 walkdir = "2.5"         
 pdf-extract = "0.7"
+tauri = { version = "1.5", features = ["api-all"] }
+open = "5.0"
+
+[build-dependencies]
+tauri-build = "1.5"

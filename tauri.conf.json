@@ -1,0 +1,39 @@
+{
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devPath": "dist",
+    "distDir": "dist",
+    "withGlobalTauri": true
+  },
+  "package": {
+    "productName": "embi_search",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": true
+    },
+    "bundle": {
+      "active": true,
+      "identifier": "com.embi.search",
+      "icon": ["icons/icon.ico"]
+    },
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "title": "Embi Search",
+        "width": 700,
+        "height": 450,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "center": true,
+        "visible": false
+      }
+    ]
+  }
+}

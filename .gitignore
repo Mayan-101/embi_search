@@ -4,4 +4,5 @@
 *.lock
 *.gguf
 .lancedb
+.lancedb_data
 *.md

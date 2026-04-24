@@ -1,125 +1,143 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-
 use tokio::sync::mpsc;
-use tokio::time::sleep;
+use tauri::{GlobalShortcutManager, Manager};
 
 use embi_search::embedding::EmbeddingEngine;
 use embi_search::harvester::{spawn_watcher, FileEvent};
 use embi_search::server::LlamaServer;
 use embi_search::vectorstore::{DocumentChunk, VectorStore};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llama_dir = Path::new("llama");
-    let model_path = Path::new("model/nomic-embed-text-v1.5.Q4_K_M.gguf");
-    let port: u16 = 8080;
+// --- App State ---
+struct AppState {
+    engine: Arc<EmbeddingEngine>,
+    store: Arc<VectorStore>,
+}
 
-    // ── Boot the embedding server ───────────────────────────────────────
-    let server = LlamaServer::spawn(llama_dir, model_path, port)?;
-    server.wait_until_ready(Duration::from_secs(60))?;
+// --- Tauri Commands ---
+#[tauri::command]
+async fn search_files(
+    query: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<embi_search::vectorstore::SearchResult>, String> {
+    let vector = state.engine.embed(&query).await
+        .map_err(|e| format!("Failed to embed query: {}", e))?;
 
-    let rt = tokio::runtime::Runtime::new()?;
-    
-    let _guard = rt.enter();
-    // Wrap our core services in Arc so they can be safely shared with background threads
-    let engine = Arc::new(EmbeddingEngine::new(server.port()));
-    
-    let test_db_path = ".lancedb_test";
-    if Path::new(test_db_path).exists() {
-        std::fs::remove_dir_all(test_db_path)?;
-    }
-    let store = Arc::new(rt.block_on(VectorStore::connect(test_db_path))?);
+    let results = state.store.search(&vector, 5).await
+        .map_err(|e| format!("Failed to search vector store: {}", e))?;
 
-    // ── Phase 3: Watcher Pipeline Test ──────────────────────────────────
-    println!("\n=== Phase 3: Watcher Pipeline Test ===");
+    Ok(results)
+}
 
-    let test_dir = PathBuf::from("test_watch_zone");
-    if test_dir.exists() {
-        std::fs::remove_dir_all(&test_dir)?;
-    }
-    std::fs::create_dir(&test_dir)?;
+#[tauri::command]
+fn open_file(path: String) -> Result<(), String> {
+    open::that(&path).map_err(|e| format!("Failed to open file: {}", e))?;
+    Ok(())
+}
 
-    // 1. Create the channel
-    let (tx, mut rx) = mpsc::channel::<FileEvent>(100);
+// --- Main Application ---
+fn main() {
+    tauri::Builder::default()
+        .setup(|app| {
+            // 1. Boot the embedding server
+            let llama_dir = Path::new("llama");
+            let model_path = Path::new("model/nomic-embed-text-v1.5.Q4_K_M.gguf");
+            
+            // We manage the server lifecycle manually here. 
+            let server = LlamaServer::spawn(llama_dir, model_path, 8080)
+                .expect("Failed to spawn llama-server");
+            server.wait_until_ready(Duration::from_secs(60))
+                .expect("Server failed to become ready");
 
-    // 2. Start the Watcher on the test directory
-    let _watcher = spawn_watcher(test_dir.clone(), tx.clone())?;
-    println!("  Watcher spawned on {:?}", test_dir);
+            // 2. Initialize Core Services using Tauri's async runtime
+            let (engine, store) = tauri::async_runtime::block_on(async {
+                let db_path = ".lancedb_data"; // Persistent DB now
+                let store = VectorStore::connect(db_path).await
+                    .expect("Failed to connect to LanceDB");
+                
+                let engine = EmbeddingEngine::new(server.port());
+                
+                (Arc::new(engine), Arc::new(store))
+            });
 
-    // 3. Spawn the background Worker Task
-   // 3. Spawn the background Worker Task
-    let engine_clone = Arc::clone(&engine);
-    let store_clone = Arc::clone(&store);
-    
-    let worker_handle = rt.spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                FileEvent::Upsert(path) => {
-                    // Windows File Lock mitigation
-                    sleep(Duration::from_millis(100)).await;
-                    
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if content.trim().is_empty() { continue; }
-                        
-                        println!("  [Worker] Upserting: {:?}", path);
-                        
-                        // FIX: Use .ok() to convert Result to Option. 
-                        // This drops the non-Send Box<dyn Error> immediately!
-                        if let Some(vector) = engine_clone.embed(&content).await.ok() {
-                            let chunk = DocumentChunk {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                vector,
-                                file_path: path.to_string_lossy().to_string(),
-                                content_snippet: content,
-                            };
-                            let _ = store_clone.delete_by_path(&chunk.file_path).await;
-                            let _ = store_clone.insert_chunks(&[chunk]).await;
+            app.manage(AppState {
+                engine: Arc::clone(&engine),
+                store: Arc::clone(&store),
+            });
+            
+            app.manage(server);
+
+            // 4. Start the Harvester & Watcher
+            // For now, we will just watch a specific test directory. 
+            let watch_dir = PathBuf::from("test_watch_zone");
+            if !watch_dir.exists() {
+                std::fs::create_dir_all(&watch_dir).unwrap();
+            }
+
+            let (tx, mut rx) = mpsc::channel::<FileEvent>(100);
+
+            // 5. Spawn the background worker onto Tauri's async runtime
+            let engine_clone = Arc::clone(&engine);
+            let store_clone = Arc::clone(&store);
+            
+            tauri::async_runtime::spawn(async move {
+                // Keep the watcher alive by holding its reference in this loop's closure
+                let _watcher = spawn_watcher(watch_dir, tx).expect("Failed to spawn watcher");
+                let _kept_watcher = _watcher; 
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        FileEvent::Upsert(path) => {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                if content.trim().is_empty() { continue; }
+                                println!("[Worker] Embedding: {:?}", path);
+                                if let Some(vector) = engine_clone.embed(&content).await.ok() {
+                                    let chunk = DocumentChunk {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        vector,
+                                        file_path: path.to_string_lossy().to_string(),
+                                        content_snippet: content,
+                                    };
+                                    let _ = store_clone.delete_by_path(&chunk.file_path).await;
+                                    let _ = store_clone.insert_chunks(&[chunk]).await;
+                                }
+                            }
+                        }
+                        FileEvent::Remove(path) => {
+                            println!("[Worker] Removing: {:?}", path);
+                            let _ = store_clone.delete_by_path(&path.to_string_lossy()).await;
                         }
                     }
                 }
-                FileEvent::Remove(path) => {
-                    println!("  [Worker] Removing: {:?}", path);
-                    let _ = store_clone.delete_by_path(&path.to_string_lossy()).await;
+            });
+
+            let main_window = app.get_window("main").unwrap();
+            
+            // Hide window when it loses focus
+            let window_clone = main_window.clone();
+            main_window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    window_clone.hide().unwrap();
                 }
-            }
-        }
-    });
-    // 4. Simulate User Filesystem Actions
-    let file_path = test_dir.join("live_test.txt");
-    
-    // Create
-    std::fs::write(&file_path, "Rust makes file watching safe and easy.")?;
-    std::thread::sleep(Duration::from_secs(2)); // Wait for pipeline
-    let count = rt.block_on(store.count_rows())?;
-    println!("  Rows after creation: {}", count);
-    assert!(count >= 1, "Database should have stored the new file");
+            });
 
-    // Modify
-    std::fs::write(&file_path, "Rust makes file watching highly performant.")?;
-    std::thread::sleep(Duration::from_secs(2));
+            // Register Alt + Space
+            let mut shortcut_manager = app.global_shortcut_manager();
+            shortcut_manager.register("Alt+Space", move || {
+                if main_window.is_visible().unwrap() {
+                    main_window.hide().unwrap();
+                } else {
+                    main_window.show().unwrap();
+                    main_window.set_focus().unwrap();
+                }
+            }).expect("Failed to register global shortcut");
 
-    // Delete
-    std::fs::remove_file(&file_path)?;
-    std::thread::sleep(Duration::from_secs(2));
-    
-    let final_count = rt.block_on(store.count_rows())?;
-    println!("  Rows after deletion: {}", final_count);
-    assert_eq!(final_count, 0, "Database should be empty after deletion");
-
-    drop(_watcher); 
-    drop(tx);       
-
-
-    rt.block_on(worker_handle).ok(); 
-
-    std::fs::remove_dir_all(&test_dir)?;
-    std::fs::remove_dir_all(test_db_path)?;
-    println!("  ✓ Phase 3 PASSED");
-
-    println!("\n=== All tests passed! ===");
-    println!("Server will be shut down.");
-
-    drop(rt); 
-    Ok(())
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![search_files, open_file])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
