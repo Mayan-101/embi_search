@@ -1,6 +1,6 @@
 # embi_search 
 
-> **A lightning-fast, privacy-first local semantic file search engine for Windows — built as a lightweight alternative to the native OS search overlay. (Basically, FUCK WINDOWS NATIVE SEARCH, Running an Embedding model in the background is somehow still faster then that hell of a mess)**
+> **A lightning-fast, privacy-first local semantic file search engine for Windows — built as a lightweight alternative to the native OS search overlay. (Basically, FUCK WINDOWS NATIVE FILE SEARCH , Running an Embedding model in the background is somehow still faster than that hell of a mess)**
 
 `embi_search` replaces the clunky Windows search experience with a floating, keyboard-driven overlay that understands *meaning*, not just keywords. Under the hood, a Rust binary manages the full lifecycle: spawning a local `llama.cpp` inference server, harvesting and watching your filesystem, chunking and embedding file content, and persisting those vectors into a local LanceDB database — all without a single byte leaving your machine.
 
