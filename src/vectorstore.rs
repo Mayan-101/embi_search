@@ -10,9 +10,6 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Table as LanceTable;
 use serde::{Deserialize, Serialize};
 
-/// Dimensionality of the embedding vectors (Nomic Embed Text v1.5).
-pub const VECTOR_DIM: i32 = 768;
-
 /// A document chunk ready to be inserted into the vector store.
 #[derive(Debug, Clone)]
 pub struct DocumentChunk {
@@ -38,12 +35,15 @@ pub struct SearchResult {
 pub struct VectorStore {
     db: Connection,
     table_name: String,
+    vector_dim: i32,
 }
 
 impl VectorStore {
     /// Connect to (or create) a LanceDB database at `db_path` and ensure the
     /// `documents` table exists with the correct schema.
-    pub async fn connect(db_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    ///
+    /// `vector_dim` specifies the embedding dimensionality (e.g. 768).
+    pub async fn connect(db_path: &str, vector_dim: i32) -> Result<Self, Box<dyn std::error::Error>> {
         let db = lancedb::connect(db_path).execute().await?;
         let table_name = "documents".to_string();
 
@@ -51,7 +51,7 @@ impl VectorStore {
         let tables = db.table_names().execute().await?;
         if !tables.contains(&table_name) {
             // Create an empty table with our schema.
-            let schema = Self::schema();
+            let schema = Self::schema(vector_dim);
             db.create_empty_table(&table_name, schema)
                 .execute()
                 .await?;
@@ -60,18 +60,18 @@ impl VectorStore {
             println!("[vectorstore] Opened existing '{}' table", table_name);
         }
 
-        Ok(Self { db, table_name })
+        Ok(Self { db, table_name, vector_dim })
     }
 
     /// Return the Arrow schema for the documents table.
-    fn schema() -> Arc<Schema> {
+    fn schema(vector_dim: i32) -> Arc<Schema> {
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
             Field::new(
                 "vector",
                 DataType::FixedSizeList(
                     Arc::new(Field::new("item", DataType::Float32, true)),
-                    VECTOR_DIM,
+                    vector_dim,
                 ),
                 true,
             ),
@@ -94,7 +94,7 @@ impl VectorStore {
             return Ok(());
         }
 
-        let schema = Self::schema();
+        let schema = Self::schema(self.vector_dim);
         let len = chunks.len();
 
         let ids: Vec<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
@@ -103,7 +103,7 @@ impl VectorStore {
 
         let vectors = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
             chunks.iter().map(|c| Some(c.vector.iter().map(|v| Some(*v)).collect::<Vec<_>>())),
-            VECTOR_DIM,
+            self.vector_dim,
         );
 
         let batch = RecordBatch::try_new(
@@ -117,7 +117,7 @@ impl VectorStore {
         )?;
 
         let table = self.table().await?;
-        let reader = RecordBatchIterator::new(vec![Ok(batch)], Self::schema());
+        let reader = RecordBatchIterator::new(vec![Ok(batch)], Self::schema(self.vector_dim));
         table.add(reader).execute().await?;
 
         println!("[vectorstore] Inserted {} chunk(s)", len);

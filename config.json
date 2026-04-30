@@ -1,0 +1,9 @@
+{
+  "llama_dir": "llama",
+  "model_path": "model/nomic-embed-text-v1.5.Q4_K_M.gguf",
+  "server_port": 8080,
+  "db_path": ".lancedb_data",
+  "watch_dirs": ["test_watch_zone"],
+  "vector_dim": 768,
+  "model_name": "nomic-embed-text-v1.5"
+}

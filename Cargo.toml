@@ -38,7 +38,7 @@ ignore = "0.4"
 notify = "8.0.0"        
 walkdir = "2.5"         
 pdf-extract = "0.7"
-tauri = { version = "1.5", features = ["api-all"] }
+tauri = { version = "1.5", features = ["global-shortcut"] }
 open = "5.0"
 
 [build-dependencies]

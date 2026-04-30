@@ -1,6 +1,7 @@
 /target
 /llama
 /model
+/icons
 *.lock
 *.gguf
 .lancedb

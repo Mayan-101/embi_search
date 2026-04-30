@@ -12,7 +12,7 @@
   },
   "tauri": {
     "allowlist": {
-      "all": true
+      "all": false
     },
     "bundle": {
       "active": true,
@@ -20,7 +20,7 @@
       "icon": ["icons/icon.ico"]
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     },
     "windows": [
       {
