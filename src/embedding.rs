@@ -52,10 +52,16 @@ impl EmbeddingEngine {
             .post(&self.url)
             .json(&req_body)
             .send()
-            .await?
-            .json::<EmbeddingResponse>()
             .await?;
 
-        Ok(response.data[0].embedding.clone())
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(format!("Llama server error ({}): {}", status, error_text).into());
+        }
+
+        let parsed = response.json::<EmbeddingResponse>().await?;
+
+        Ok(parsed.data[0].embedding.clone())
     }
 }

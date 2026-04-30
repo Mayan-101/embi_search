@@ -30,6 +30,9 @@ pub struct AppConfig {
 
     /// Model identifier sent to the `/v1/embeddings` endpoint.
     pub model_name: String,
+
+    /// Maximum number of characters per text chunk.
+    pub max_chunk_chars: usize,
 }
 
 impl AppConfig {

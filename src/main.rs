@@ -69,7 +69,7 @@ fn main() {
             app.manage(server);
 
             // 3. Indexing pipeline — runs entirely inside the Tokio runtime
-            let indexer = Arc::new(Indexer::new(Arc::clone(&engine), Arc::clone(&store)));
+            let indexer = Arc::new(Indexer::new(Arc::clone(&engine), Arc::clone(&store), config.max_chunk_chars));
             let watch_dirs = config.watch_dirs.clone();
 
             tauri::async_runtime::spawn(async move {

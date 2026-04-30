@@ -47,6 +47,10 @@ impl LlamaServer {
             "--embedding",
             "--ctx-size",
             "8192",
+            "--batch-size",
+            "8192",
+            "--ubatch-size",
+            "8192",
         ]);
 
         // On Windows, hide the console window for the child process.

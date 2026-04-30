@@ -14,7 +14,7 @@ pub enum FileEvent {
 /// Basic filter to only process plaintext and code files.
 pub fn is_supported(path: &Path) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    matches!(ext, "txt" | "md" | "rs" | "py" | "csv" | "json" | "toml")
+    matches!(ext, "html" | "pdf" | "md")
 }
 
 /// Recursively walks a directory, skipping hidden files and respecting .gitignore.
